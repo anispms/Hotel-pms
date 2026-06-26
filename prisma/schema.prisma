@@ -1,0 +1,274 @@
+// Hotel PMS data model
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────────────────────
+// Tenancy: an Organization (account) owns one or more Properties
+// ─────────────────────────────────────────────────────────────
+model Organization {
+  id         String     @id @default(cuid())
+  name       String
+  createdAt  DateTime   @default(now())
+  users      User[]
+  properties Property[]
+}
+
+model Property {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name           String
+  legalName      String?
+  email          String?
+  phone          String?
+  website        String?
+  addressLine    String?
+  city           String?
+  country        String?
+  currency       String       @default("USD")
+  timezone       String       @default("UTC")
+  checkInTime    String       @default("15:00")
+  checkOutTime   String       @default("11:00")
+  taxRate        Float        @default(0.12)
+  taxName        String       @default("Room Tax")
+  invoicePrefix  String       @default("INV")
+  invoiceNext    Int          @default(1001)
+  invoiceFooter  String?
+  onboardedAt    DateTime?
+  createdAt      DateTime     @default(now())
+
+  guests       Guest[]
+  roomTypes    RoomType[]
+  rooms        Room[]
+  ratePlans    RatePlan[]
+  reservations Reservation[]
+  integrations Integration[]
+  webhooks     WebhookEndpoint[]
+  events       EventLog[]
+
+  @@index([organizationId])
+}
+
+// ─────────────────────────────────────────────────────────────
+// Users & access control
+// ─────────────────────────────────────────────────────────────
+model User {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  name           String
+  email          String       @unique
+  passwordHash   String
+  role           String       @default("FRONT_DESK") // ADMIN | MANAGER | FRONT_DESK | HOUSEKEEPING
+  active         Boolean      @default(true)
+  createdAt      DateTime     @default(now())
+
+  @@index([organizationId])
+}
+
+// ─────────────────────────────────────────────────────────────
+// Guests (CRM)
+// ─────────────────────────────────────────────────────────────
+model Guest {
+  id           String        @id @default(cuid())
+  propertyId   String
+  property     Property      @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  firstName    String
+  lastName     String
+  email        String?
+  phone        String?
+  address      String?
+  city         String?
+  country      String?
+  idNumber     String? // passport / national ID
+  vip          Boolean       @default(false)
+  notes        String?
+  createdAt    DateTime      @default(now())
+  reservations Reservation[]
+
+  @@index([propertyId])
+  @@index([lastName])
+}
+
+// ─────────────────────────────────────────────────────────────
+// Inventory: room types, rooms, rate plans
+// ─────────────────────────────────────────────────────────────
+model RoomType {
+  id           String        @id @default(cuid())
+  propertyId   String
+  property     Property      @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  code         String // e.g. STD, DLX, STE
+  name         String
+  description  String?
+  baseRate     Float // default nightly rate
+  maxOccupancy Int           @default(2)
+  rooms        Room[]
+  ratePlans    RatePlan[]
+  reservations Reservation[]
+
+  @@unique([propertyId, code])
+  @@index([propertyId])
+}
+
+model Room {
+  id           String        @id @default(cuid())
+  propertyId   String
+  property     Property      @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  number       String
+  floor        Int           @default(1)
+  roomTypeId   String
+  roomType     RoomType      @relation(fields: [roomTypeId], references: [id])
+  // Housekeeping status: CLEAN | DIRTY | INSPECTED | OUT_OF_ORDER
+  hkStatus     String        @default("CLEAN")
+  notes        String?
+  reservations Reservation[]
+
+  @@unique([propertyId, number])
+  @@index([propertyId])
+  @@index([roomTypeId])
+}
+
+model RatePlan {
+  id         String   @id @default(cuid())
+  propertyId String
+  property   Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  code       String // BAR, ADV, CORP
+  name       String
+  roomTypeId String
+  roomType   RoomType @relation(fields: [roomTypeId], references: [id])
+  rate       Float
+  includesBreakfast Boolean @default(false)
+  active     Boolean  @default(true)
+
+  @@unique([propertyId, code])
+  @@index([propertyId])
+}
+
+// ─────────────────────────────────────────────────────────────
+// Reservations
+// ─────────────────────────────────────────────────────────────
+model Reservation {
+  id           String   @id @default(cuid())
+  propertyId   String
+  property     Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  confirmation String   @unique
+  guestId      String
+  guest        Guest    @relation(fields: [guestId], references: [id])
+  roomTypeId   String
+  roomType     RoomType @relation(fields: [roomTypeId], references: [id])
+  roomId       String?
+  room         Room?    @relation(fields: [roomId], references: [id])
+
+  checkIn      DateTime
+  checkOut     DateTime
+  adults       Int      @default(1)
+  children     Int      @default(0)
+  ratePerNight Float
+  source       String   @default("DIRECT") // DIRECT | OTA | PHONE | WALK_IN | CORPORATE
+  // BOOKED | CHECKED_IN | CHECKED_OUT | CANCELLED | NO_SHOW
+  status       String   @default("BOOKED")
+  notes        String?
+  createdAt    DateTime @default(now())
+
+  folio        Folio?
+
+  @@index([propertyId])
+  @@index([status])
+  @@index([checkIn])
+  @@index([checkOut])
+}
+
+// ─────────────────────────────────────────────────────────────
+// Billing: one folio per reservation, many line items
+// ─────────────────────────────────────────────────────────────
+model Folio {
+  id            String      @id @default(cuid())
+  reservationId String      @unique
+  reservation   Reservation @relation(fields: [reservationId], references: [id], onDelete: Cascade)
+  items         FolioItem[]
+  createdAt     DateTime    @default(now())
+}
+
+model FolioItem {
+  id        String   @id @default(cuid())
+  folioId   String
+  folio     Folio    @relation(fields: [folioId], references: [id], onDelete: Cascade)
+  // CHARGE | PAYMENT
+  kind      String
+  category  String   @default("MISC") // ROOM | FNB | TAX | MINIBAR | PAYMENT | MISC
+  description String
+  amount    Float // positive for charges, positive for payments (kind disambiguates)
+  postedAt  DateTime @default(now())
+
+  @@index([folioId])
+}
+
+// ─────────────────────────────────────────────────────────────
+// Integrations marketplace + automation (Zapier / Make / etc.)
+// ─────────────────────────────────────────────────────────────
+model Integration {
+  id         String   @id @default(cuid())
+  propertyId String
+  property   Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  key        String // booking_engine | payment | door_lock | accounting | channel_manager
+  name       String
+  category   String // BOOKING | PAYMENT | ACCESS | ACCOUNTING | CHANNEL | AUTOMATION
+  enabled    Boolean  @default(false)
+  config     String   @default("{}") // JSON blob of provider-specific settings
+  updatedAt  DateTime @updatedAt @default(now())
+
+  @@unique([propertyId, key])
+  @@index([propertyId])
+}
+
+model WebhookEndpoint {
+  id         String            @id @default(cuid())
+  propertyId String
+  property   Property          @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  name       String
+  url        String
+  provider   String            @default("CUSTOM") // ZAPIER | MAKE | CUSTOM
+  events     String            @default("*") // comma-separated event names, or "*"
+  secret     String?
+  active     Boolean           @default(true)
+  createdAt  DateTime          @default(now())
+  deliveries WebhookDelivery[]
+
+  @@index([propertyId])
+}
+
+model WebhookDelivery {
+  id         String           @id @default(cuid())
+  endpointId String?
+  endpoint   WebhookEndpoint? @relation(fields: [endpointId], references: [id], onDelete: SetNull)
+  event      String
+  status     String // SUCCESS | FAILED
+  statusCode Int?
+  error      String?
+  createdAt  DateTime         @default(now())
+
+  @@index([createdAt])
+}
+
+// Activity / event stream (every domain event, regardless of subscribers)
+model EventLog {
+  id         String   @id @default(cuid())
+  propertyId String
+  property   Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  event      String
+  entity     String?
+  entityId   String?
+  summary    String
+  payload    String   @default("{}")
+  createdAt  DateTime @default(now())
+
+  @@index([propertyId])
+  @@index([createdAt])
+  @@index([event])
+}

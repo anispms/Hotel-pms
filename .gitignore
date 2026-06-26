@@ -1,0 +1,25 @@
+/node_modules
+/.next
+/out
+/build
+*.tsbuildinfo
+next-env.d.ts.timestamp
+
+# prisma / sqlite
+prisma/*.db
+prisma/*.db-journal
+*.sqlite
+
+# env
+.env
+.env*.local
+
+# logs
+*.log
+.DS_Store
+
+# playwright
+/test-results
+/playwright-report
+/blob-report
+/.playwright
